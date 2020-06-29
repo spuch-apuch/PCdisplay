@@ -29,12 +29,14 @@
   9-minFAN, 10-maxTEMP, 11-minTEMP, 12-manualFAN, 13-manualCOLOR, 14-fanCtrl, 15-colorCtrl, 16-brightCtrl, 17-LOGinterval, 18-tempSource, 19-AltCPU temp
 */
 // ------------------------ НАСТРОЙКИ ----------------------------
-#define DRIVER_VERSION 1    // 0 - маркировка драйвера кончается на 4АТ, 1 - на 4Т
-#define CPU_TEMP_SENSOR 1     // 0 или 1, выбрать перебором тот датчик, с которым температура процессора будет ближе к реальной
-#define COLOR_ALGORITM 1    // 0 или 1 - разные алгоритмы изменения цвета (строка 222)
-#define ERROR_DUTY 50       // скорость вентиляторов при потере связи
-#define ERROR_TEMP 1        // 1 - показывать температуру при потере связи. 0 - нет
-#define ERROR_BRIGHTNESS 50 // яркость LED при потере связи
+#define DRIVER_VERSION 1       // 0 - маркировка драйвера кончается на 4АТ, 1 - на 4Т
+#define CPU_TEMP_SENSOR 1      // 0 или 1, выбрать перебором тот датчик, с которым температура процессора будет ближе к реальной
+#define COLOR_ALGORITM 1       // 0 или 1 - разные алгоритмы изменения цвета (строка 222)
+#define ERROR_DUTY 50          // скорость вентиляторов при потере связи
+#define ERROR_TEMP 1           // 1 - показывать температуру при потере связи. 0 - нет
+#define ERROR_BRIGHTNESS 50    // яркость LED при потере связи
+#define NO_BOOST_SPEED_MAX 75  // Максимальная скорость куллеров от USB
+#define NO_BOOST_BRIGHTNESS 60 // Максимальная яркость LED от USB
 // ------------------------ НАСТРОЙКИ ----------------------------
 
 // ----------------------- ПИНЫ ---------------------------
@@ -43,7 +45,6 @@
 #define G_PIN 3             // на мосфет ленты, зелёный
 #define B_PIN 6             // на мосфет ленты, синий
 #define POWER_BOOST 4       // флаг подключения внешнего питания
-#define CURRENT_LIMIT 2000  // лимит по току в миллиамперах, автоматически управляет яркостью (пожалей свой блок питания!) 0 - выключить лимит
 
 // ----------------------- ПИНЫ ---------------------------
 
@@ -71,13 +72,10 @@ byte blocks, halfs;
 byte index = 0;
 String string_convert;
 unsigned long timeout/*, uptime_timer*/;
-boolean lightState, timeOut_flag = 1;
+boolean boost = 0, timeOut_flag = 1;
 int duty, LEDcolor;
 int k, b, R, G, B, Rf, Gf, Bf;
 byte mainTemp;
-byte lines[] = {4, 5, 7, 6}; // Lines - CPU, GPU, GPUmem, RAMuse
-String perc;
-unsigned long sec, mins, hrs;
 
 void setup() {
   Serial.begin(9600);
@@ -85,6 +83,7 @@ void setup() {
   pinMode(R_PIN, OUTPUT);
   pinMode(G_PIN, OUTPUT);
   pinMode(B_PIN, OUTPUT);
+  pinMode(POWER_BOOST, INPUT);
   digitalWrite(R_PIN, 0);
   digitalWrite(G_PIN, 0);
   digitalWrite(B_PIN, 0);
@@ -121,6 +120,9 @@ void parsing() {
     timeout = millis();
     timeOut_flag = 1;
   }
+  if (timeOut_flag) {
+    boost = !digitalRead(POWER_BOOST);
+  }
 }
 
 void dutyCalculate() {
@@ -135,21 +137,25 @@ void dutyCalculate() {
       case 2: mainTemp = max(PCdata[CPUtemp], PCdata[1]);   // взять опорную температуру как максимум CPU и GPU
         break;
     }
-    duty = map(mainTemp, PCdata[11], PCdata[10], PCdata[9], PCdata[8]);
-    duty = constrain(duty, PCdata[9], PCdata[8]);
+    speedMAX = (boost || PCdata[8] <= NO_BOOST_SPEED_MAX) ? PCdata[8] : NO_BOOST_SPEED_MAX;
+    duty = map(mainTemp, PCdata[11], PCdata[10], PCdata[9], speedMAX);
+    duty = constrain(duty, PCdata[9], speedMAX);
   }
-  if (!timeOut_flag) duty = ERROR_DUTY;               // если пропало соединение, поставить вентиляторы на ERROR_DUTY
+  if (!timeOut_flag) {
+    duty = ERROR_DUTY;               // если пропало соединение, поставить вентиляторы на ERROR_DUTY
+  }
 }
 
 void timeoutTick() {
   if ((millis() - timeout > 5000) && timeOut_flag) {
     timeOut_flag = 0;
+    boost = 0;
   }
 }
 
 void LEDcontrol() {
   if (timeOut_flag) {
-    b = PCdata[16];
+    b = (boost || PCdata[16] <= NO_BOOST_BRIGHTNESS) ? PCdata[16] : NO_BOOST_BRIGHTNESS;
     if (PCdata[13] == 1)          // если стоит галочка Manual Color
       LEDcolor = PCdata[15];      // цвет равен установленному ползунком
     else {                        // если нет
@@ -224,9 +230,9 @@ void LEDcontrol() {
 // ------------------------------ ОСНОВНОЙ ЦИКЛ -------------------------------
 void loop() {
   parsing();                          // парсим строки с компьютера
+  timeoutTick();                      // проверка таймаута
   dutyCalculate();                    // посчитать скважность для вентиляторов
   Timer1.pwm(FAN_PIN, duty * 10);     // управлять вентиляторами
-  timeoutTick();                      // проверка таймаута
   LEDcontrol();                       // управлять цветом ленты
 }
 // ------------------------------ ОСНОВНОЙ ЦИКЛ -------------------------------
